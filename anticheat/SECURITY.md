@@ -20,7 +20,7 @@ Use one of the following:
 
 - **GitHub private vulnerability reporting** (preferred): open a private security
   advisory from the repository's "Security" tab → "Report a vulnerability".
-- **Email**: security@example.com (replace with the maintainer's address).
+- **Email**: deelee45678@gmail.com
 
 Include as much of the following as possible:
 

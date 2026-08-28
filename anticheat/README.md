@@ -511,7 +511,7 @@ the [LICENSE](LICENSE) file for details.
 
 ### Commercial Licensing
 For commercial use (e.g., integrating into proprietary game engines without
-open-sourcing your code), please contact [your-email/website] for commercial
+open-sourcing your code), please contact deelee45678@gmail.com for commercial
 licensing options.
 
 ## Contributing
