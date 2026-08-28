@@ -2,6 +2,7 @@
 *.o
 anticheat
 libanticheat.so
+tests/network_stress
 
 # Python
 __pycache__/
