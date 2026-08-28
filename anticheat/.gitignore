@@ -8,6 +8,11 @@ tests/test_integrity
 tests/test_telemetry
 tests/test_envguard
 tests/ptrace_tracer
+anticheat.san
+tests/test_sha256.san
+tests/test_integrity.san
+tests/test_telemetry.san
+tests/test_envguard.san
 
 # Python
 __pycache__/

@@ -27,3 +27,16 @@ jobs:
 
       - name: Test without libbpf (network engine only)
         run: cd anticheat && env PKG_CONFIG_LIBDIR=/nonexistent make test
+
+  sanitize:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install libbpf + toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libbpf-dev python3
+
+      - name: Build and run under AddressSanitizer + UBSan
+        run: cd anticheat && make test-san

@@ -1,6 +1,8 @@
 CC      ?= cc
 CFLAGS  ?= -O2 -Wall -Wextra -std=c11 -pthread -fPIC
 LDFLAGS ?= -pthread -lm
+# Memory-safety build for `make test-san` (AddressSanitizer + UBSan).
+SANFLAGS ?= -O1 -g -fsanitize=address,undefined
 
 # Optional eBPF kernel monitor (requires libbpf). Detect it at build time so
 # the project still builds on hosts without libbpf: in that case ebpf_monitor.c
@@ -48,9 +50,11 @@ $(LIB): $(LIBOBJ)
 clean:
 	rm -f $(OBJ) $(LIBOBJ) $(BIN) $(LIB) tests/network_stress \
 	      tests/test_sha256 tests/test_integrity tests/test_telemetry \
-	      tests/test_envguard tests/ptrace_tracer
+	      tests/test_envguard tests/ptrace_tracer \
+	      tests/test_sha256.san tests/test_integrity.san \
+	      tests/test_telemetry.san tests/test_envguard.san anticheat.san
 
-.PHONY: all clean test
+.PHONY: all clean test test-san
 
 # Stress / robustness tests for the authenticated UDP network engine.
 tests/network_stress: tests/network_stress.c src/network.c src/sha256.c
@@ -90,3 +94,38 @@ test: all tests/network_stress $(TEST_BINS)
 	./tests/test_telemetry
 	./tests/test_envguard
 	python3 -m unittest tests.test_dashboard tests.test_modules
+
+# Memory-safety check: rebuild the unit tests and the real binary under
+# AddressSanitizer + UBSan and exercise the actual code paths. Leak detection
+# is disabled (the scanner is a one-shot process; we care about heap/UB errors).
+tests/test_sha256.san: tests/test_sha256.c src/sha256.c
+	$(CC) $(SANFLAGS) -Isrc -o $@ tests/test_sha256.c src/sha256.c -pthread -lm
+
+tests/test_integrity.san: tests/test_integrity.c src/integrity.c src/report.c \
+                            src/network.c src/sha256.c
+	$(CC) $(SANFLAGS) -Isrc -o $@ tests/test_integrity.c src/integrity.c \
+	       src/report.c src/network.c src/sha256.c -pthread -lm
+
+tests/test_telemetry.san: tests/test_telemetry.c src/telemetry.c src/report.c \
+                            src/network.c src/sha256.c
+	$(CC) $(SANFLAGS) -Isrc -o $@ tests/test_telemetry.c src/telemetry.c \
+	       src/report.c src/network.c src/sha256.c -pthread -lm
+
+tests/test_envguard.san: tests/test_envguard.c src/envguard.c src/report.c \
+                          src/network.c src/sha256.c
+	$(CC) $(SANFLAGS) -Isrc -o $@ tests/test_envguard.c src/envguard.c \
+	       src/report.c src/network.c src/sha256.c -pthread -lm
+
+anticheat.san: $(SRC)
+	$(CC) $(SANFLAGS) -Isrc -pthread $(LIBBPF_CFLAGS) -o $@ $(SRC) -lm $(LIBBPF_LIBS)
+
+test-san: tests/test_sha256.san tests/test_integrity.san tests/test_telemetry.san \
+          tests/test_envguard.san anticheat.san
+	ASAN_OPTIONS=detect_leaks=0 ./tests/test_sha256.san
+	ASAN_OPTIONS=detect_leaks=0 ./tests/test_integrity.san
+	ASAN_OPTIONS=detect_leaks=0 ./tests/test_telemetry.san
+	ASAN_OPTIONS=detect_leaks=0 ./tests/test_envguard.san
+	ASAN_OPTIONS=detect_leaks=0 ./anticheat.san >/tmp/anticheat_san.log 2>&1 || true
+	! grep -q AddressSanitizer /tmp/anticheat_san.log
+	ASAN_OPTIONS=detect_leaks=0 ./anticheat.san -s -q >/tmp/anticheat_san_s.log 2>&1 || true
+	! grep -q AddressSanitizer /tmp/anticheat_san_s.log
