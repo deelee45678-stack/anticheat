@@ -1,0 +1,11 @@
+# Build artifacts
+*.o
+anticheat
+libanticheat.so
+
+# Python
+__pycache__/
+*.pyc
+
+# Editor / OS cruft
+.DS_Store
