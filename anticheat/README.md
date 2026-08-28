@@ -1,5 +1,9 @@
 # Anti-Cheat Scanner
 
+[![Build Status](https://github.com/deelee45678-stack/H/actions/workflows/ci.yml/badge.svg)](https://github.com/deelee45678-stack/H/actions/workflows/ci.yml)
+[![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](LICENSE)
+[![Tests](https://img.shields.io/badge/tests-26%20passing-green)](https://github.com/deelee45678-stack/H/actions/workflows/ci.yml)
+
 > See [THREAT_MODEL.md](THREAT_MODEL.md) for what this defends against, what is
 > out of scope, and the trust boundaries of each layer.
 
@@ -7,6 +11,22 @@ A defensive anti-cheat scanner written in C for Linux. It detects common
 cheating techniques: known cheat/debugger tools, library-injection vectors,
 attached debuggers, tampered game files, live in-memory code patching, and
 virtualized or reverse-engineering sandbox environments.
+
+## ⚠️ Security Note
+
+This anti-cheat scanner is open-source by design. While transparency helps the
+community verify and improve the code, it also means cheat developers can study
+the detection logic.
+
+**Key protections that remain effective even with source visibility:**
+- **Server-side telemetry validation** - detection thresholds and heuristics are evaluated on your game server, not the client
+- **Runtime secrets** - HMAC keys, detection thresholds, and operational configurations are not embedded in the source
+
+**Recommendations for deployment:**
+- Use the server-side telemetry module as your primary signal
+- Regularly update detection signatures and thresholds
+- Monitor for evasion attempts
+- Consider commercial licensing for closed-source integrations
 
 ## What it does
 
@@ -483,3 +503,24 @@ Keys: `q` quit, `c` clear, `r` reset counters.
 | Server-side telemetry | `telemetry.c/h` | speedhack / aimbot heuristics over `PlayerTick` streams (simulation) | user |
 | Kernel monitor | `ebpf_monitor.c/h` + `ebpf_program.c/h` | eBPF tracepoint program on `ptrace` / `process_vm_readv` / `process_vm_writev`; ring-buffer CRITICAL events | **root + eBPF + libbpf**, else INFO fallback |
 | Network reporting | `network.c/h` | non-blocking UDP client; broadcasts MEDIUM+ findings as JSON to a dashboard | user (UDP egress) |
+
+## License
+
+This project is licensed under the GNU Affero General Public License v3.0 - see
+the [LICENSE](LICENSE) file for details.
+
+### Commercial Licensing
+For commercial use (e.g., integrating into proprietary game engines without
+open-sourcing your code), please contact [your-email/website] for commercial
+licensing options.
+
+## Contributing
+
+Contributions are welcome! Please:
+
+1. Fork the repository
+2. Create a feature branch
+3. Run `make test` to ensure all tests pass
+4. Submit a Pull Request
+
+For major changes, please open an issue first to discuss.

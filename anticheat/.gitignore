@@ -1,7 +1,10 @@
 # Build artifacts
 *.o
+*.so
 anticheat
 libanticheat.so
+/obj/
+/bin/
 tests/network_stress
 tests/test_sha256
 tests/test_integrity
@@ -14,9 +17,25 @@ tests/test_integrity.san
 tests/test_telemetry.san
 tests/test_envguard.san
 
+# Test artifacts (logs only; the tests/*.c sources are tracked)
+*.log
+*.out
+
 # Python
 __pycache__/
 *.pyc
 
 # Editor / OS cruft
 .DS_Store
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Environment files
+.env
+*.env
+
+# Manifest files (except examples)
+manifest_*.txt
+!example_manifest.txt
