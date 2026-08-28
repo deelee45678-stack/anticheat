@@ -29,9 +29,13 @@ int initialize_security_runtime(int flags);
 /*
  * Configure the UDP alert destination. Must be called (typically before
  * initialize_security_runtime with SEC_RUNTIME_NETWORK_LOGGING) to enable
- * network reporting. Returns 0 on success, -1 on failure.
+ * network reporting. `key` is the HMAC shared secret; if NULL the
+ * ANTICHEAT_NETWORK_KEY environment variable is used. A missing key is a hard
+ * failure (-1): unauthenticated reporting is not allowed. Returns 0 on success,
+ * -1 on failure (invalid address/port or missing key).
  */
-int security_runtime_set_network_target(const char *server_ip, int port);
+int security_runtime_set_network_target(const char *server_ip, int port,
+                                        const char *key);
 
 /*
  * Tear down the security runtime: stops background threads and releases

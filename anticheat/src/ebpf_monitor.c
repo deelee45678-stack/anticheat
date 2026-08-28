@@ -190,6 +190,10 @@ int ebpf_monitor_init(ebpf_monitor_t *m, reporter_t *rep) {
     return -1;
 }
 
+void ebpf_monitor_request_stop(ebpf_monitor_t *m) {
+    (void)m;
+}
+
 int ebpf_monitor_run(ebpf_monitor_t *m, int duration_sec) {
     (void)m;
     (void)duration_sec;

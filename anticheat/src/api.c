@@ -35,8 +35,9 @@ static void *ebpf_run_thread(void *arg) {
     return NULL;
 }
 
-int security_runtime_set_network_target(const char *server_ip, int port) {
-    return initialize_network_client(server_ip, port);
+int security_runtime_set_network_target(const char *server_ip, int port,
+                                         const char *key) {
+    return initialize_network_client(server_ip, port, key);
 }
 
 int initialize_security_runtime(int flags) {

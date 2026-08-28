@@ -87,7 +87,7 @@ to call from a foreign game loop.
 | `void shutdown_security_runtime(void)` | Stops background threads and releases resources (call from the engine shutdown path). |
 | `int security_runtime_verdict(void)` | Returns 0 if clean, 1 if any MEDIUM/HIGH/CRITICAL finding is present. |
 | `void security_runtime_counts(int out_counts[5])` | Fills a 5-element array indexed by severity (INFO, LOW, MEDIUM, HIGH, CRITICAL). |
-| `int security_runtime_set_network_target(const char *server_ip, int port)` | Configure the UDP alert destination (call before `initialize_security_runtime` with `SEC_RUNTIME_NETWORK_LOGGING`). Returns 0 on success, -1 on failure. |
+| `int security_runtime_set_network_target(const char *server_ip, int port, const char *key)` | Configure the UDP alert destination (call before `initialize_security_runtime` with `SEC_RUNTIME_NETWORK_LOGGING`). `key` is the HMAC shared secret (or `NULL` to read `ANTICHEAT_NETWORK_KEY`). Returns 0 on success, -1 if the address is invalid or the key is missing (unauthenticated reporting is forbidden). |
 
 `flags` is a bitmask: `SEC_RUNTIME_SCAN` (one-shot process/env/debugger
 checks), `SEC_RUNTIME_BACKGROUND` (start the live `.text` integrity monitor
@@ -180,6 +180,7 @@ blocked.
 | `-T, --telemetry-sim` | simulate player telemetry and run the speedhack/aimbot heuristics |
 | `-E, --ebpf` | load the eBPF cross-process memory monitor (root + libbpf required) |
 | `-N, --network IP:PORT` | stream MEDIUM+ findings to a UDP dashboard at `IP:PORT` |
+| `-K, --network-key KEY` | HMAC shared secret for the `-N` stream (falls back to `ANTICHEAT_NETWORK_KEY`; required) |
 | `-i, --init FILE` | build a baseline manifest from `--paths` and exit |
 | `-v, --verify FILE` | verify files against a baseline manifest and exit |
 | `-m, --manifest FILE` | verify file integrity against a baseline during the scan |
@@ -307,14 +308,20 @@ dashboard instead of (or in addition to) the local report. It is fully optional
 and degrades to a no-op when not configured, so the rest of the scanner can call
 it unconditionally.
 
-- `initialize_network_client(const char *server_ip, int port)` opens a single
-  **non-blocking** `SOCK_DGRAM` UDP socket (`O_NONBLOCK` + `MSG_DONTWAIT`).
+- `initialize_network_client(const char *server_ip, int port, const char *key)`
+  opens a single **non-blocking** `SOCK_DGRAM` UDP socket (`O_NONBLOCK` +
+  `MSG_DONTWAIT`), resolving `server_ip` via `getaddrinfo(AF_UNSPEC)` so both
+  IPv4 and IPv6 targets work. `key` (or, if `NULL`, the `ANTICHEAT_NETWORK_KEY`
+  environment variable) is the HMAC shared secret; a missing key is a hard
+  failure — unauthenticated reporting is never allowed.
 - `network_send_alert(int severity, const char *module, const char *message)`
-  serializes a compact JSON payload and transmits it. It is **non-blocking** and
-  serialized through a short-lived mutex, so calling it from a scan loop, a
-  background thread, or a foreign game frame can never stall on network lag. If
-  the kernel send buffer is full the datagram is dropped (returns 0) rather than
-  blocking.
+  serializes a compact JSON payload, signs it with HMAC-SHA256, and transmits
+  it. It is **non-blocking** and serialized through a short-lived mutex, so
+  calling it from a scan loop, a background thread, or a foreign game frame can
+  never stall on network lag. If the kernel send buffer is full the datagram is
+  dropped (returns 0) rather than blocking. A per-(module,message) rate limiter
+  caps identical alerts to one per second so a burst of findings cannot flood
+  the dashboard or spike egress.
 - `network_shutdown()` closes the socket and disables reporting.
 
 Every time `report_add()` records a **MEDIUM, HIGH, or CRITICAL** finding it
@@ -323,11 +330,18 @@ broadcast.
 
 ### Payload schema
 
-One UDP datagram per alert, newline-terminated compact JSON:
+One UDP datagram per alert, newline-terminated compact JSON. Every datagram
+carries an HMAC-SHA256 signature (`sig`):
 
 ```json
-{"severity":3,"sev_label":"HIGH","module":"envguard","message":"...","ts":1690000000}
+{"severity":3,"sev_label":"HIGH","module":"envguard","message":"...","ts":1690000000,"sig":"<64 hex chars>"}
 ```
+
+The dashboard **must** verify `sig` before trusting a datagram; datagrams with a
+missing or invalid signature are rejected. The signature is
+`HMAC-SHA256(key, "severity|sev_label|module|message|ts")` over the raw,
+unescaped field values joined by `|`, so JSON escaping never affects the
+signature.
 
 | Field | Type | Meaning |
 |-------|------|---------|
@@ -336,27 +350,39 @@ One UDP datagram per alert, newline-terminated compact JSON:
 | `module` | str | originating module (ebpf, memguard, envguard, ...) |
 | `message` | str | finding detail (JSON-escaped) |
 | `ts` | int | unix epoch seconds |
+| `sig` | str | HMAC-SHA256 hex digest of `severity\|sev_label\|module\|message\|ts` |
 
 ### Engine integration
 
 ```c
-security_runtime_set_network_target("127.0.0.1", 9999);
+security_runtime_set_network_target("127.0.0.1", 9999, getenv("ANTICHEAT_NETWORK_KEY"));
 initialize_security_runtime(SEC_RUNTIME_SCAN |
                             SEC_RUNTIME_BACKGROUND |
                             SEC_RUNTIME_NETWORK_LOGGING);
 ```
 
-Standalone CLI equivalent: `./anticheat -N 127.0.0.1:9999`.
+Standalone CLI equivalent (the shared secret comes from `-K/--network-key` or
+the `ANTICHEAT_NETWORK_KEY` environment variable):
+
+```bash
+ANTICHEAT_NETWORK_KEY=secret ./anticheat -N 127.0.0.1:9999
+./anticheat -N 127.0.0.1:9999 -K secret
+```
 
 ### Dashboard
 
 `dashboard.py` (repository root) is a standalone Python 3 TUI that binds the UDP
-port, parses the JSON payloads, and renders a severity-colored live view
-(counts per severity + scrolling alert log). It falls back to plain colored line
-output when not attached to a TTY.
+port (IPv4 or IPv6), parses the JSON payloads, verifies each HMAC signature, and
+renders a severity-colored live view (counts per severity + scrolling alert
+log). It falls back to plain colored line output when not attached to a TTY.
+
+When started **without** a key it runs in legacy mode and warns that datagrams
+are not authenticated — only suitable for local, trusted testing. Always pass
+`--network-key` (or set `ANTICHEAT_NETWORK_KEY`) so the dashboard rejects
+forged or tampered alerts.
 
 ```bash
-./dashboard.py --host 0.0.0.0 --port 9999
+./dashboard.py --host 0.0.0.0 --port 9999 --network-key secret
 ```
 
 Keys: `q` quit, `c` clear, `r` reset counters.

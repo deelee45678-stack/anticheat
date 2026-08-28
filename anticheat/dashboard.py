@@ -8,11 +8,18 @@ administration view using curses.
 
 Payload schema (compact JSON, one datagram per alert):
     {"severity": <int 0..4>, "sev_label": <str>, "module": <str>,
-     "message": <str>, "ts": <unix epoch seconds>}
+     "message": <str>, "ts": <unix epoch seconds>,
+     "sig": <hex HMAC-SHA256 over "sev|label|module|message|ts">}
+
+Every datagram carries an HMAC-SHA256 signature ("sig") computed by the client
+over the canonical field string "severity|sev_label|module|message|ts" using the
+shared secret. When --network-key (or ANTICHEAT_NETWORK_KEY) is set the dashboard
+verifies the signature and silently drops datagrams whose signature is missing or
+invalid. Run without a key only for local, trusted testing.
 
 Usage:
-    ./dashboard.py                 # listens on 0.0.0.0:9999
-    ./dashboard.py --host 127.0.0.1 --port 9999
+    ./dashboard.py                 # listens on 0.0.0.0:9999 (no verification)
+    ./dashboard.py --host 127.0.0.1 --port 9999 --network-key SECRET
     ./dashboard.py --no-curses    # plain colored line output (no TUI)
 
 Keys (TUI): q = quit, c = clear, r = reset counters.
@@ -20,12 +27,19 @@ Keys (TUI): q = quit, c = clear, r = reset counters.
 
 import argparse
 import curses
+import hashlib
+import hmac
 import json
+import os
 import select
 import socket
 import sys
 import time
 from datetime import datetime
+
+# HMAC shared secret (set from --network-key or ANTICHEAT_NETWORK_KEY). When
+# None, the dashboard runs in legacy (unverified) mode and warns loudly.
+NET_KEY = None
 
 SEV_NAMES = ["INFO", "LOW", "MEDIUM", "HIGH", "CRITICAL"]
 SEV_COLORS = {
@@ -42,15 +56,53 @@ def parse_endpoint(host, port):
 
 
 def make_socket(host, port):
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    sock.bind((host, port))
-    sock.setblocking(False)
-    return sock
+    """Bind a UDP socket on `host`:`port`, resolving both IPv4 and IPv6 via
+    getaddrinfo. Returns the first socket that successfully binds."""
+    addrinfo = socket.getaddrinfo(host, port, socket.AF_UNSPEC,
+                                 socket.SOCK_DGRAM)
+    last_err = None
+    for family, stype, proto, _canon, sockaddr in addrinfo:
+        try:
+            sock = socket.socket(family, stype, proto)
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            sock.bind(sockaddr)
+            sock.setblocking(False)
+            return sock
+        except OSError as e:
+            last_err = e
+            continue
+    raise RuntimeError("could not bind any address for %s:%d (%s)" %
+                       (host, port, last_err))
+
+
+def verify_sig(obj):
+    """Return True iff `obj` carries a valid HMAC-SHA256 signature under
+    NET_KEY. Never raises: malformed or missing data is treated as invalid."""
+    if NET_KEY is None:
+        return True  # legacy / unverified mode
+    try:
+        sig = obj.get("sig")
+        if not isinstance(sig, str):
+            return False
+        canon = "%s|%s|%s|%s|%s" % (
+            obj.get("severity"),
+            obj.get("sev_label"),
+            obj.get("module"),
+            obj.get("message"),
+            obj.get("ts"),
+        )
+        expected = hmac.new(NET_KEY.encode(), canon.encode(),
+                            hashlib.sha256).hexdigest()
+        return hmac.compare_digest(expected, sig)
+    except Exception:
+        return False
 
 
 def receive(sock, timeout=0.2):
-    """Return a list of decoded alert dicts received within `timeout`."""
+    """Return a list of decoded, HMAC-verified alert dicts received within
+    `timeout`. Malformed datagrams, and datagrams whose signature is missing or
+    invalid (when NET_KEY is set), are dropped silently rather than crashing the
+    dashboard."""
     alerts = []
     ready, _, _ = select.select([sock], [], [], timeout)
     if not ready:
@@ -68,8 +120,17 @@ def receive(sock, timeout=0.2):
         try:
             obj = json.loads(text)
         except json.JSONDecodeError:
+            # Cannot parse: with a key configured we cannot verify, so reject;
+            # in legacy mode keep it as a raw line for visibility.
+            if NET_KEY is not None:
+                continue
             obj = {"severity": -1, "sev_label": "RAW",
-                   "module": "network", "message": text, "ts": int(time.time())}
+                   "module": "network", "message": text,
+                   "ts": int(time.time())}
+        except Exception:
+            continue
+        if not verify_sig(obj):
+            continue
         alerts.append(obj)
     return alerts
 
@@ -175,9 +236,20 @@ def main():
     p = argparse.ArgumentParser(description="UDP alert dashboard")
     p.add_argument("--host", default="0.0.0.0")
     p.add_argument("--port", type=int, default=9999)
+    p.add_argument("--network-key", default=os.environ.get("ANTICHEAT_NETWORK_KEY"),
+                   help="HMAC-SHA256 shared secret (or set ANTICHEAT_NETWORK_KEY). "
+                        "When omitted, signatures are NOT verified.")
     p.add_argument("--no-curses", action="store_true",
                    help="plain colored line output instead of the TUI")
     args = p.parse_args()
+
+    global NET_KEY
+    NET_KEY = args.network_key
+    if NET_KEY:
+        print("HMAC verification ENABLED", file=sys.stderr)
+    else:
+        print("WARNING: no --network-key / ANTICHEAT_NETWORK_KEY set; "
+              "datagrams are NOT authenticated", file=sys.stderr)
 
     sock = make_socket(args.host, args.port)
     print(f"Listening for UDP alerts on {args.host}:{args.port}", file=sys.stderr)

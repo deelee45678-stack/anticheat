@@ -99,6 +99,13 @@ static char **split_paths(const char *arg, int *count) {
 }
 
 int main(int argc, char **argv) {
+    /* Ensure the UDP socket (and any other runtime resources) are released on
+     * a clean exit, and translate SIGINT/SIGTERM into a graceful shutdown
+     * rather than an abrupt kill (important for the long-running -w -N modes). */
+    atexit(network_shutdown);
+    signal(SIGINT, on_signal);
+    signal(SIGTERM, on_signal);
+
     static const struct option longopts[] = {
         {"init",           required_argument, 0, 'i'},
         {"verify",         required_argument, 0, 'v'},
@@ -114,6 +121,7 @@ int main(int argc, char **argv) {
         {"telemetry-sim",  no_argument,       0, 'T'},
         {"ebpf",           no_argument,       0, 'E'},
         {"network",        required_argument, 0, 'N'},
+        {"network-key",    required_argument, 0, 'K'},
         {0, 0, 0, 0}
     };
 
@@ -128,11 +136,12 @@ int main(int argc, char **argv) {
     int telemetry_sim = 0;
     int ebpf_mon = 0;
     const char *network_arg = NULL;
+    const char *network_key = NULL;
     int watch_interval = 250;
     int watch_time = 0;
 
     int c;
- while ((c = getopt_long(argc, argv, "i:v:m:p:l:qhwW:t:sTEN:",
+  while ((c = getopt_long(argc, argv, "i:v:m:p:l:qhwW:t:sTEK:N:",
                               longopts, NULL)) != -1) {
         switch (c) {
             case 'i':
@@ -170,6 +179,9 @@ int main(int argc, char **argv) {
                 break;
             case 'N':
                 network_arg = optarg;
+                break;
+            case 'K':
+                network_key = optarg;
                 break;
             case 'W':
                 watch_interval = atoi(optarg);
@@ -228,7 +240,9 @@ int main(int argc, char **argv) {
     }
 
     /* Initialize the UDP alert client before any findings are recorded so that
-     * MEDIUM+ detections are streamed to the dashboard. */
+     * MEDIUM+ detections are streamed to the dashboard. The HMAC secret comes
+     * from -K/--network-key or, failing that, the ANTICHEAT_NETWORK_KEY
+     * environment variable; a missing secret is a hard failure. */
     if (network_arg) {
         char host[256];
         int port = 9999;
@@ -238,11 +252,13 @@ int main(int argc, char **argv) {
             *colon = '\0';
             port = atoi(colon + 1);
         }
-        if (initialize_network_client(host, port) == 0) {
+        if (initialize_network_client(host, port, network_key) == 0) {
             report_add(&rep, SEV_INFO, "network",
                        "UDP alert reporting enabled", network_arg);
         } else {
-            fprintf(stderr, "warning: could not initialize network client %s\n",
+            fprintf(stderr,
+                    "warning: could not initialize network client %s "
+                    "(check IP:PORT and ANTICHEAT_NETWORK_KEY)\n",
                     network_arg);
         }
     }
