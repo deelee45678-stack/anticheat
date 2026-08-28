@@ -73,6 +73,46 @@ it degrades to a no-op fallback.
 - `libanticheat.so` — a position-independent shared library (`-fPIC -shared`)
   that bundles every module for embedding inside a game engine.
 
+## Testing
+
+The detection modules (everything except the networking layer) have a unit
+test suite that is driven through `make test`. It builds both C test binaries
+and Python tests, then runs them:
+
+```bash
+make test
+```
+
+What is covered:
+
+- **SHA-256** (`tests/test_sha256.c`) — the FIPS 180-4 vectors (empty string,
+  `abc`, the 448-bit and 896-bit sample messages) plus an incremental-vs-one-shot
+  equivalence check.
+- **File integrity** (`tests/test_integrity.c`) — building a baseline manifest,
+  verifying a clean set, detecting a tampered file, detecting a deleted file,
+  and two malformed-manifest cases (garbage-only and a missing referenced file)
+  that must fail cleanly without crashing.
+- **Telemetry** (`tests/test_telemetry.c`) — the speed-hack boundary at exactly
+  `15.0 u/s` (strict `>`), aimbot snap/lock detection at the `360 deg/s` snap
+  boundary, a natural-decay turn that must *not* false-positive, and the bundled
+  `--telemetry-sim` anomaly dataset (asserts both a HIGH speedhack and a MEDIUM
+  aimbot finding).
+- **Environment guard** (`tests/test_envguard.c`) — the hypervisor-signature
+  matching logic (VMware, Hyper-V, KVM, Xen, Parallels, VirtualBox, bhyve) and
+  the DMI/BIOS virtualization markers (QEMU, Bochs, VirtualBox), driven
+  deterministically via the `ANTICHEAT_TEST_HV_SIG` and `ANTICHEAT_TEST_DMI_DIR`
+  overrides so no real hypervisor is required.
+- **Live binary behavior** (`tests/test_modules.py` + `tests/ptrace_tracer.c`)
+  — runs the built `anticheat` binary to verify the memguard live-patch
+  self-test detection, debugger detection (clean vs. real ptrace-traced), and the
+  MEDIUM→HIGH escalation when a VM is confirmed alongside an attached debugger.
+- **Network engine** (`tests/network_stress.c`) — the authenticated UDP flood /
+  HMAC / concurrency stress tests (unchanged from before this suite).
+- **Dashboard** (`tests/test_dashboard.py`) — the UDP server/auth/replay tests.
+
+`make test` is exercised in CI for **both** the HAVE_LIBBPF build and the
+no-libbpf build, so the suite must stay green in either configuration.
+
 ## Engine integration (shared library)
 
 The project can be linked into a game engine (Unreal, Unity, custom C/C++)

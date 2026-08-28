@@ -3,6 +3,11 @@
 anticheat
 libanticheat.so
 tests/network_stress
+tests/test_sha256
+tests/test_integrity
+tests/test_telemetry
+tests/test_envguard
+tests/ptrace_tracer
 
 # Python
 __pycache__/

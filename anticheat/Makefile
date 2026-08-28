@@ -46,7 +46,9 @@ $(LIB): $(LIBOBJ)
 	$(CC) $(CFLAGS) $(LIBBPF_CFLAGS) -c -o $@ $<
 
 clean:
-	rm -f $(OBJ) $(LIBOBJ) $(BIN) $(LIB) tests/network_stress
+	rm -f $(OBJ) $(LIBOBJ) $(BIN) $(LIB) tests/network_stress \
+	      tests/test_sha256 tests/test_integrity tests/test_telemetry \
+	      tests/test_envguard tests/ptrace_tracer
 
 .PHONY: all clean test
 
@@ -55,6 +57,36 @@ tests/network_stress: tests/network_stress.c src/network.c src/sha256.c
 	$(CC) $(CFLAGS) -Isrc -o $@ tests/network_stress.c \
 	       src/network.c src/sha256.c $(LDFLAGS)
 
-test: tests/network_stress
+# Core detection-module unit tests (everything except the networking layer).
+tests/test_sha256: tests/test_sha256.c src/sha256.c
+	$(CC) $(CFLAGS) -Isrc -o $@ tests/test_sha256.c src/sha256.c $(LDFLAGS)
+
+tests/test_integrity: tests/test_integrity.c src/integrity.c src/report.c \
+                       src/network.c src/sha256.c
+	$(CC) $(CFLAGS) -Isrc -o $@ tests/test_integrity.c src/integrity.c \
+	       src/report.c src/network.c src/sha256.c $(LDFLAGS)
+
+tests/test_telemetry: tests/test_telemetry.c src/telemetry.c src/report.c \
+                       src/network.c src/sha256.c
+	$(CC) $(CFLAGS) -Isrc -o $@ tests/test_telemetry.c src/telemetry.c \
+	       src/report.c src/network.c src/sha256.c $(LDFLAGS)
+
+tests/test_envguard: tests/test_envguard.c src/envguard.c src/report.c \
+                      src/network.c src/sha256.c
+	$(CC) $(CFLAGS) -Isrc -o $@ tests/test_envguard.c src/envguard.c \
+	       src/report.c src/network.c src/sha256.c $(LDFLAGS)
+
+# Helper that traces a child so debugger detection can be exercised live.
+tests/ptrace_tracer: tests/ptrace_tracer.c
+	$(CC) $(CFLAGS) -Isrc -o $@ tests/ptrace_tracer.c
+
+TEST_BINS := tests/test_sha256 tests/test_integrity tests/test_telemetry \
+             tests/test_envguard tests/ptrace_tracer
+
+test: all tests/network_stress $(TEST_BINS)
 	./tests/network_stress
-	python3 -m unittest tests.test_dashboard
+	./tests/test_sha256
+	./tests/test_integrity
+	./tests/test_telemetry
+	./tests/test_envguard
+	python3 -m unittest tests.test_dashboard tests.test_modules

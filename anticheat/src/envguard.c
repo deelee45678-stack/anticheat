@@ -5,9 +5,17 @@
 #include <ctype.h>
 #include <limits.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
+
+/*
+ * Test hooks: when the following environment variables are set, the matching
+ * logic is driven deterministically instead of reading real hardware:
+ *   ANTICHEAT_TEST_HV_SIG  - 12-char hypervisor signature for the CPUID path
+ *   ANTICHEAT_TEST_DMI_DIR - directory of DMI marker files (product_name, ...)
+ */
 
 /* CPUID via inline assembly (x86). */
 static void cpuid(unsigned int leaf, unsigned int subleaf,
@@ -19,24 +27,31 @@ static void cpuid(unsigned int leaf, unsigned int subleaf,
 }
 
 static void check_cpuid(reporter_t *rep, int *vm_hits) {
-    unsigned int eax, ebx, ecx, edx;
-
-    cpuid(1, 0, &eax, &ebx, &ecx, &edx);
-    if ((ecx & 0x80000000u) == 0) {
-        report_add(rep, SEV_INFO, "envguard",
-                   "CPUID: hypervisor-present bit not set", NULL);
-        return;
-    }
-
-    cpuid(0x40000000u, 0, &eax, &ebx, &ecx, &edx);
     char sig[13];
-    memcpy(sig + 0, &ebx, 4);
-    memcpy(sig + 4, &ecx, 4);
-    memcpy(sig + 8, &edx, 4);
-    sig[12] = '\0';
 
-    report_add(rep, SEV_INFO, "envguard",
-               "CPUID: hypervisor present", sig);
+    const char *override = getenv("ANTICHEAT_TEST_HV_SIG");
+    if (override) {
+        snprintf(sig, sizeof(sig), "%.12s", override);
+        sig[12] = '\0';
+    } else {
+        unsigned int eax, ebx, ecx, edx;
+
+        cpuid(1, 0, &eax, &ebx, &ecx, &edx);
+        if ((ecx & 0x80000000u) == 0) {
+            report_add(rep, SEV_INFO, "envguard",
+                       "CPUID: hypervisor-present bit not set", NULL);
+            return;
+        }
+
+        cpuid(0x40000000u, 0, &eax, &ebx, &ecx, &edx);
+        memcpy(sig + 0, &ebx, 4);
+        memcpy(sig + 4, &ecx, 4);
+        memcpy(sig + 8, &edx, 4);
+        sig[12] = '\0';
+
+        report_add(rep, SEV_INFO, "envguard",
+                   "CPUID: hypervisor present", sig);
+    }
 
     static const struct {
         const char *sig;
@@ -110,6 +125,19 @@ static void check_dmi_file(reporter_t *rep, const char *path,
 }
 
 static void check_dmi(reporter_t *rep, int *vm_hits) {
+    const char *dir = getenv("ANTICHEAT_TEST_DMI_DIR");
+    if (dir) {
+        const char *files[] = {
+            "product_name", "sys_vendor", "board_vendor", "bios_vendor"
+        };
+        for (size_t i = 0; i < 4; i++) {
+            char path[4096];
+            snprintf(path, sizeof(path), "%s/%s", dir, files[i]);
+            check_dmi_file(rep, path, files[i], vm_hits);
+        }
+        return;
+    }
+
     static const struct {
         const char *path;
         const char *label;
@@ -247,10 +275,17 @@ int envguard_scan(reporter_t *rep) {
     int vm_hits = 0;
     int container_hits = 0;
 
+    const char *test_hv = getenv("ANTICHEAT_TEST_HV_SIG");
+    const char *test_dmi = getenv("ANTICHEAT_TEST_DMI_DIR");
+    int test_mode = (test_hv != NULL) || (test_dmi != NULL);
+
     check_cpuid(rep, &vm_hits);
     check_dmi(rep, &vm_hits);
-    check_cpuinfo(rep, &vm_hits);
-    check_container(rep, &container_hits);
+
+    if (!test_mode) {
+        check_cpuinfo(rep, &vm_hits);
+        check_container(rep, &container_hits);
+    }
 
     return (vm_hits ? ENVGUARD_VM : 0) |
            (container_hits ? ENVGUARD_CONTAINER : 0);
