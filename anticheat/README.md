@@ -1,5 +1,8 @@
 # Anti-Cheat Scanner
 
+> See [THREAT_MODEL.md](THREAT_MODEL.md) for what this defends against, what is
+> out of scope, and the trust boundaries of each layer.
+
 A defensive anti-cheat scanner written in C for Linux. It detects common
 cheating techniques: known cheat/debugger tools, library-injection vectors,
 attached debuggers, tampered game files, live in-memory code patching, and

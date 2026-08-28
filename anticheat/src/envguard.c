@@ -64,6 +64,8 @@ static void check_cpuid(reporter_t *rep, int *vm_hits) {
         {"prl hypervsr", "Parallels"},
         {"VrtualPCvV",   "VirtualBox"},
         {"bhyve bhyve",  "bhyve"},
+        {"TCGTCGTCGTCG", "QEMU (TCG)"},
+        {"BochsBochs",   "Bochs"},
         {NULL, NULL}
     };
 

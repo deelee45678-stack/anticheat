@@ -94,6 +94,8 @@ int main(void) {
     test_sig("Parallels", "prl hypervsr", 1);
     test_sig("VirtualBox","VrtualPCvV",   1);
     test_sig("bhyve",     "bhyve bhyve",  1);
+    test_sig("QEMU (TCG)", "TCGTCGTCGTCG", 1);
+    test_sig("Bochs",      "BochsBochs",   1);
     test_sig("physical (no match)", "PhysicalPhysi", 0);
 
     printf("== envguard: DMI/BIOS virtualization markers ==\n");

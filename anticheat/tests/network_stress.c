@@ -205,6 +205,10 @@ int main(void) {
      * under extreme concurrency, which is why the assertion below is tolerant). */
     int rcv = 8 * 1024 * 1024;
     setsockopt(g_sock, SOL_SOCKET, SO_RCVBUF, &rcv, sizeof(rcv));
+    /* Bound the receiver's recvfrom so it periodically re-checks g_stop and
+     * the test always terminates even if no further datagrams arrive. */
+    struct timeval rcvto = {1, 0};
+    setsockopt(g_sock, SOL_SOCKET, SO_RCVTIMEO, &rcvto, sizeof(rcvto));
     struct sockaddr_in sa;
     memset(&sa, 0, sizeof(sa));
     sa.sin_family = AF_INET;
