@@ -4,6 +4,10 @@ LDFLAGS ?= -pthread -lm
 # Memory-safety build for `make test-san` (AddressSanitizer + UBSan).
 SANFLAGS ?= -O1 -g -fsanitize=address,undefined
 
+# Headers live next to their .c files in subfolders; expose every subfolder so
+# the basename-only `#include "foo.h"` lines keep resolving after the split.
+INCLUDES := -Isrc -Isrc/core -Isrc/detection -Isrc/net -Isrc/ebpf
+
 # Optional eBPF kernel monitor (requires libbpf). Detect it at build time so
 # the project still builds on hosts without libbpf: in that case ebpf_monitor.c
 # compiles to a graceful no-op that falls back to the user-mode protections.
@@ -12,19 +16,26 @@ LIBBPF_LIBS    :=
 EBPF_PROG_SRC  :=
 # ebpf_monitor.c is ALWAYS compiled: it provides the graceful [INFO] fallback
 # stubs when libbpf is absent, and api.c/main.c always reference it.
-EBPF_MON_SRC  := src/ebpf_monitor.c
+EBPF_MON_SRC  := src/ebpf/ebpf_monitor.c
 
 ifneq ($(shell pkg-config --exists libbpf 2>/dev/null && echo yes),)
     LIBBPF_CFLAGS := $(shell pkg-config --cflags libbpf)
     LIBBPF_LIBS   := $(shell pkg-config --libs libbpf)
-    EBPF_PROG_SRC := src/ebpf_program.c
+    EBPF_PROG_SRC := src/ebpf/ebpf_program.c
     CFLAGS        += -DHAVE_LIBBPF
 endif
 
-# All sources (including the shared-library API wrapper and network engine).
-SRC := src/main.c src/report.c src/debugger.c src/scanner.c src/integrity.c \
-       src/sha256.c src/memguard.c src/envguard.c src/telemetry.c \
-       src/api.c src/network.c $(EBPF_MON_SRC) $(EBPF_PROG_SRC)
+# All sources, grouped by concern:
+#   core/      - shared primitives: reporting, hashing, shared-library API
+#   detection/ - the actual cheat-detection modules
+#   net/       - authenticated UDP alert transport
+#   ebpf/      - optional kernel-level monitor (libbpf) + graceful fallback
+SRC := src/main.c \
+       src/core/report.c src/core/sha256.c src/core/api.c \
+       src/detection/debugger.c src/detection/scanner.c \
+       src/detection/integrity.c src/detection/memguard.c \
+       src/detection/envguard.c src/detection/telemetry.c \
+       src/net/network.c $(EBPF_MON_SRC) $(EBPF_PROG_SRC)
 
 # Objects for the standalone binary (keeps main() out of the shared library).
 OBJ := $(SRC:.c=.o)
@@ -45,7 +56,7 @@ $(LIB): $(LIBOBJ)
 	$(CC) -shared $(CFLAGS) -o $@ $(LIBOBJ) $(LDFLAGS) $(LIBBPF_LIBS)
 
 %.o: %.c
-	$(CC) $(CFLAGS) $(LIBBPF_CFLAGS) -c -o $@ $<
+	$(CC) $(CFLAGS) $(INCLUDES) $(LIBBPF_CFLAGS) -c -o $@ $<
 
 clean:
 	rm -f $(OBJ) $(LIBOBJ) $(BIN) $(LIB) tests/network_stress \
@@ -57,32 +68,35 @@ clean:
 .PHONY: all clean test test-san
 
 # Stress / robustness tests for the authenticated UDP network engine.
-tests/network_stress: tests/network_stress.c src/network.c src/sha256.c
-	$(CC) $(CFLAGS) -Isrc -o $@ tests/network_stress.c \
-	       src/network.c src/sha256.c $(LDFLAGS)
+tests/network_stress: tests/network_stress.c src/net/network.c src/core/sha256.c
+	$(CC) $(CFLAGS) $(INCLUDES) -o $@ tests/network_stress.c \
+	       src/net/network.c src/core/sha256.c $(LDFLAGS)
 
 # Core detection-module unit tests (everything except the networking layer).
-tests/test_sha256: tests/test_sha256.c src/sha256.c
-	$(CC) $(CFLAGS) -Isrc -o $@ tests/test_sha256.c src/sha256.c $(LDFLAGS)
+tests/test_sha256: tests/test_sha256.c src/core/sha256.c
+	$(CC) $(CFLAGS) $(INCLUDES) -o $@ tests/test_sha256.c src/core/sha256.c $(LDFLAGS)
 
-tests/test_integrity: tests/test_integrity.c src/integrity.c src/report.c \
-                       src/network.c src/sha256.c
-	$(CC) $(CFLAGS) -Isrc -o $@ tests/test_integrity.c src/integrity.c \
-	       src/report.c src/network.c src/sha256.c $(LDFLAGS)
+tests/test_integrity: tests/test_integrity.c src/detection/integrity.c \
+                      src/core/report.c src/net/network.c src/core/sha256.c
+	$(CC) $(CFLAGS) $(INCLUDES) -o $@ tests/test_integrity.c \
+	       src/detection/integrity.c src/core/report.c src/net/network.c \
+	       src/core/sha256.c $(LDFLAGS)
 
-tests/test_telemetry: tests/test_telemetry.c src/telemetry.c src/report.c \
-                       src/network.c src/sha256.c
-	$(CC) $(CFLAGS) -Isrc -o $@ tests/test_telemetry.c src/telemetry.c \
-	       src/report.c src/network.c src/sha256.c $(LDFLAGS)
+tests/test_telemetry: tests/test_telemetry.c src/detection/telemetry.c \
+                      src/core/report.c src/net/network.c src/core/sha256.c
+	$(CC) $(CFLAGS) $(INCLUDES) -o $@ tests/test_telemetry.c \
+	       src/detection/telemetry.c src/core/report.c src/net/network.c \
+	       src/core/sha256.c $(LDFLAGS)
 
-tests/test_envguard: tests/test_envguard.c src/envguard.c src/report.c \
-                      src/network.c src/sha256.c
-	$(CC) $(CFLAGS) -Isrc -o $@ tests/test_envguard.c src/envguard.c \
-	       src/report.c src/network.c src/sha256.c $(LDFLAGS)
+tests/test_envguard: tests/test_envguard.c src/detection/envguard.c \
+                     src/core/report.c src/net/network.c src/core/sha256.c
+	$(CC) $(CFLAGS) $(INCLUDES) -o $@ tests/test_envguard.c \
+	       src/detection/envguard.c src/core/report.c src/net/network.c \
+	       src/core/sha256.c $(LDFLAGS)
 
 # Helper that traces a child so debugger detection can be exercised live.
 tests/ptrace_tracer: tests/ptrace_tracer.c
-	$(CC) $(CFLAGS) -Isrc -o $@ tests/ptrace_tracer.c
+	$(CC) $(CFLAGS) $(INCLUDES) -o $@ tests/ptrace_tracer.c
 
 TEST_BINS := tests/test_sha256 tests/test_integrity tests/test_telemetry \
              tests/test_envguard tests/ptrace_tracer
@@ -98,34 +112,40 @@ test: all tests/network_stress $(TEST_BINS)
 # Memory-safety check: rebuild the unit tests and the real binary under
 # AddressSanitizer + UBSan and exercise the actual code paths. Leak detection
 # is disabled (the scanner is a one-shot process; we care about heap/UB errors).
-tests/test_sha256.san: tests/test_sha256.c src/sha256.c
-	$(CC) $(SANFLAGS) -Isrc -o $@ tests/test_sha256.c src/sha256.c -pthread -lm
+tests/test_sha256.san: tests/test_sha256.c src/core/sha256.c
+	$(CC) $(SANFLAGS) $(INCLUDES) -o $@ tests/test_sha256.c \
+	       src/core/sha256.c -pthread -lm
 
-tests/test_integrity.san: tests/test_integrity.c src/integrity.c src/report.c \
-                            src/network.c src/sha256.c
-	$(CC) $(SANFLAGS) -Isrc -o $@ tests/test_integrity.c src/integrity.c \
-	       src/report.c src/network.c src/sha256.c -pthread -lm
+tests/test_integrity.san: tests/test_integrity.c src/detection/integrity.c \
+                          src/core/report.c src/net/network.c src/core/sha256.c
+	$(CC) $(SANFLAGS) $(INCLUDES) -o $@ tests/test_integrity.c \
+	       src/detection/integrity.c src/core/report.c src/net/network.c \
+	       src/core/sha256.c -pthread -lm
 
-tests/test_telemetry.san: tests/test_telemetry.c src/telemetry.c src/report.c \
-                            src/network.c src/sha256.c
-	$(CC) $(SANFLAGS) -Isrc -o $@ tests/test_telemetry.c src/telemetry.c \
-	       src/report.c src/network.c src/sha256.c -pthread -lm
+tests/test_telemetry.san: tests/test_telemetry.c src/detection/telemetry.c \
+                          src/core/report.c src/net/network.c src/core/sha256.c
+	$(CC) $(SANFLAGS) $(INCLUDES) -o $@ tests/test_telemetry.c \
+	       src/detection/telemetry.c src/core/report.c src/net/network.c \
+	       src/core/sha256.c -pthread -lm
 
-tests/test_envguard.san: tests/test_envguard.c src/envguard.c src/report.c \
-                          src/network.c src/sha256.c
-	$(CC) $(SANFLAGS) -Isrc -o $@ tests/test_envguard.c src/envguard.c \
-	       src/report.c src/network.c src/sha256.c -pthread -lm
+tests/test_envguard.san: tests/test_envguard.c src/detection/envguard.c \
+                         src/core/report.c src/net/network.c src/core/sha256.c
+	$(CC) $(SANFLAGS) $(INCLUDES) -o $@ tests/test_envguard.c \
+	       src/detection/envguard.c src/core/report.c src/net/network.c \
+	       src/core/sha256.c -pthread -lm
 
 anticheat.san: $(SRC)
-	$(CC) $(SANFLAGS) -Isrc -pthread $(LIBBPF_CFLAGS) -o $@ $(SRC) -lm $(LIBBPF_LIBS)
+	$(CC) $(SANFLAGS) $(INCLUDES) -pthread $(LIBBPF_CFLAGS) \
+	       -o $@ $(SRC) -lm $(LIBBPF_LIBS)
 
-test-san: tests/test_sha256.san tests/test_integrity.san tests/test_telemetry.san \
-          tests/test_envguard.san anticheat.san
+test-san: tests/test_sha256.san tests/test_integrity.san \
+          tests/test_telemetry.san tests/test_envguard.san anticheat.san
 	ASAN_OPTIONS=detect_leaks=0 ./tests/test_sha256.san
 	ASAN_OPTIONS=detect_leaks=0 ./tests/test_integrity.san
 	ASAN_OPTIONS=detect_leaks=0 ./tests/test_telemetry.san
 	ASAN_OPTIONS=detect_leaks=0 ./tests/test_envguard.san
 	ASAN_OPTIONS=detect_leaks=0 ./anticheat.san >/tmp/anticheat_san.log 2>&1 || true
 	! grep -q AddressSanitizer /tmp/anticheat_san.log
-	ASAN_OPTIONS=detect_leaks=0 ./anticheat.san -s -q >/tmp/anticheat_san_s.log 2>&1 || true
+	ASAN_OPTIONS=detect_leaks=0 ./anticheat.san -s -q \
+	       >/tmp/anticheat_san_s.log 2>&1 || true
 	! grep -q AddressSanitizer /tmp/anticheat_san_s.log

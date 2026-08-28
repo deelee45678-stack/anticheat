@@ -122,7 +122,7 @@ The project can be linked into a game engine (Unreal, Unity, custom C/C++)
 through `libanticheat.so`. All public entry points use C linkage and are safe
 to call from a foreign game loop.
 
-### Public API (`src/api.h`)
+### Public API (`src/core/api.h`)
 
 | Function | Purpose |
 |----------|---------|
@@ -258,20 +258,25 @@ self pid: 748
 ```
 anticheat/
 ├── Makefile
+├── tests/               unit + integration + live (ptrace) tests
 └── src/
-    ├── main.c          CLI entry point, argument parsing
-    ├── report.c/h      severity-ranked findings, summary, log, verdict
-    ├── scanner.c/h     process and environment scanning
-    ├── debugger.c/h    debugger detection (TracerPid + ptrace)
-    ├── integrity.c/h   SHA-256 file hashing and manifest verification
-    ├── sha256.c/h      self-contained SHA-256 (FIPS 180-4)
-├── memguard.c/h    background-thread live .text integrity monitor
-├── envguard.c/h    VM / sandbox / hypervisor detection (CPUID + DMI)
-├── telemetry.c/h   server-side telemetry validation (speedhack/aimbot)
-├── ebpf_program.c/h hand-assembled eBPF tracepoint program builder
-├── ebpf_monitor.c/h kernel-level cross-process memory access monitor
-├── api.c/h         shared-library entry point for game-engine integration
-└── network.c/h     non-blocking UDP alert reporting engine
+    ├── main.c           CLI entry point, argument parsing
+    ├── core/            shared primitives
+    │   ├── report.c/h   severity-ranked findings, summary, log, verdict
+    │   ├── sha256.c/h   self-contained SHA-256 (FIPS 180-4)
+    │   └── api.c/h      shared-library entry point for game-engine integration
+    ├── detection/       the actual cheat-detection modules
+    │   ├── scanner.c/h  process and environment scanning
+    │   ├── debugger.c/h debugger detection (TracerPid + ptrace)
+    │   ├── integrity.c/h SHA-256 file hashing and manifest verification
+    │   ├── memguard.c/h background-thread live .text integrity monitor
+    │   ├── envguard.c/h VM / sandbox / hypervisor detection (CPUID + DMI)
+    │   └── telemetry.c/h server-side telemetry validation (speedhack/aimbot)
+    ├── net/             authenticated alert transport
+    │   └── network.c/h  non-blocking UDP alert reporting engine
+    └── ebpf/            optional kernel-level monitor (libbpf) + fallback
+        ├── ebpf_program.c/h hand-assembled eBPF tracepoint program builder
+        └── ebpf_monitor.c/h kernel-level cross-process memory access monitor
 ```
 
 `dashboard.py` (repository root) is a standalone Python TUI that listens for
