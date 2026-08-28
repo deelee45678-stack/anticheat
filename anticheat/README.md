@@ -1,8 +1,8 @@
 # Anti-Cheat Scanner
 
-[![Build Status](https://github.com/deelee45678-stack/H/actions/workflows/ci.yml/badge.svg)](https://github.com/deelee45678-stack/H/actions/workflows/ci.yml)
+[![Build Status](https://github.com/deelee45678-stack/anticheat/actions/workflows/ci.yml/badge.svg)](https://github.com/deelee45678-stack/anticheat/actions/workflows/ci.yml)
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-26%20passing-green)](https://github.com/deelee45678-stack/H/actions/workflows/ci.yml)
+[![Tests](https://img.shields.io/badge/tests-26%20passing-green)](https://github.com/deelee45678-stack/anticheat/actions/workflows/ci.yml)
 
 > See [THREAT_MODEL.md](THREAT_MODEL.md) for what this defends against, what is
 > out of scope, and the trust boundaries of each layer.

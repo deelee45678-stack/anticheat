@@ -23,4 +23,4 @@ adheres to [Semantic Versioning](https://semver.org/).
 - QEMU (TCG) and Bochs CPUID detection
 - Source tree split into `core/`, `detection/`, `net/`, and `ebpf/` subfolders
 
-[1.0.0]: https://github.com/deelee45678-stack/H/releases/tag/v1.0.0
+[1.0.0]: https://github.com/deelee45678-stack/anticheat/releases/tag/v1.0.0
