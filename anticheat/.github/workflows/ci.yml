@@ -1,0 +1,29 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install libbpf (for the HAVE_LIBBPF build path)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libbpf-dev python3
+
+      - name: Build with libbpf (HAVE_LIBBPF)
+        run: cd anticheat && make clean && make
+
+      - name: Test with libbpf (HAVE_LIBBPF)
+        run: cd anticheat && make test
+
+      - name: Build without libbpf
+        run: cd anticheat && env PKG_CONFIG_LIBDIR=/nonexistent make clean && env PKG_CONFIG_LIBDIR=/nonexistent make
+
+      - name: Test without libbpf (network engine only)
+        run: cd anticheat && env PKG_CONFIG_LIBDIR=/nonexistent make test

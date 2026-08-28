@@ -106,6 +106,7 @@ static int  g_received = 0;
 static int  g_verified = 0;
 static int  g_bad = 0;
 static int  g_stop = 0;
+static long g_send_errs = 0;   /* network_send_alert() returning < 0 */
 static pthread_mutex_t g_m = PTHREAD_MUTEX_INITIALIZER;
 
 static void *receiver(void *arg) {
@@ -170,7 +171,8 @@ static void *sender(void *arg) {
     char module[64];
     for (int i = 0; i < sa->count; i++) {
         snprintf(module, sizeof(module), "t%d_m%d", sa->id, i);
-        network_send_alert(2, module, "concurrent stress alert");
+        int r = network_send_alert(2, module, "concurrent stress alert");
+        if (r < 0) __sync_fetch_and_add(&g_send_errs, 1);
     }
     return NULL;
 }
@@ -306,6 +308,30 @@ int main(void) {
     printf("[info] flood: sent=%d dropped=%d errors=%d in %.2fs\n",
            sent, drops, errs, secs);
     printf("[ok] non-blocking drop under full send buffer passed\n");
+
+    /* 4. Concurrency + saturation: several threads fire at the same unread
+     * socket together, forcing the full-buffer path under contention (as if
+     * memguard's thread, the scan loop, and an eBPF callback all alert at
+     * once). The whole storm must finish quickly: no individual send blocks. */
+    #define FLOOD_THREADS 4
+    #define FLOOD_PER 50000
+    g_send_errs = 0;
+    pthread_t f_tx[FLOOD_THREADS];
+    struct send_arg f_args[FLOOD_THREADS];
+    clock_gettime(CLOCK_MONOTONIC, &t0);
+    for (int i = 0; i < FLOOD_THREADS; i++) {
+        f_args[i].id = 1000 + i;
+        f_args[i].count = FLOOD_PER;
+        if (pthread_create(&f_tx[i], NULL, sender, &f_args[i]) != 0)
+            fail("flood tx thread");
+    }
+    for (int i = 0; i < FLOOD_THREADS; i++) pthread_join(f_tx[i], NULL);
+    clock_gettime(CLOCK_MONOTONIC, &t1);
+    secs = (t1.tv_sec - t0.tv_sec) + (t1.tv_nsec - t0.tv_nsec) / 1e9;
+    if (secs > 10.0) fail("multithreaded saturated flood blocked (not non-blocking?)");
+    if (g_send_errs != 0) fail("multithreaded saturated flood produced errors");
+    printf("[ok] concurrent non-blocking send under saturation passed (%.2fs)\n",
+           secs);
 
     network_shutdown();
     close(drop_sock);

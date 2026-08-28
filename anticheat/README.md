@@ -324,6 +324,12 @@ it unconditionally.
   the dashboard or spike egress.
 - `network_shutdown()` closes the socket and disables reporting.
 
+**Key hygiene:** the shared secret must come from the `ANTICHEAT_NETWORK_KEY`
+environment variable. Passing it via `-K/--network-key` (CLI) or
+`--network-key` (dashboard) is supported but prints a one-line warning that the
+secret is then visible via `ps` and shell history — use the environment variable
+in production.
+
 Every time `report_add()` records a **MEDIUM, HIGH, or CRITICAL** finding it
 automatically calls `network_send_alert()`, so no caller has to remember to
 broadcast.
@@ -352,6 +358,22 @@ signature.
 | `ts` | int | unix epoch seconds |
 | `sig` | str | HMAC-SHA256 hex digest of `severity\|sev_label\|module\|message\|ts` |
 
+#### Replay protection (enforced by the dashboard when a key is set)
+
+A valid signature alone does not stop an attacker from capturing one datagram
+and replaying it later. The dashboard therefore applies two further checks:
+
+- **Freshness window** — a datagram whose `ts` is more than **30 seconds**
+  outside the dashboard's current clock (in either direction) is rejected, even
+  with a perfectly valid signature. Keep the client and dashboard clocks in
+  rough agreement (NTP).
+- **Replay cache** — the dashboard remembers every signature it has seen for
+  **60 seconds** (the `sig` value, not the payload). An exact duplicate seen
+  inside that TTL is rejected, so a captured datagram cannot be replayed within
+  the freshness window. The cache is bounded (oldest entries expire after the
+  TTL) and is sized defensively (capped at 200,000 entries) so a flood of
+  unique datagrams cannot exhaust memory.
+
 ### Engine integration
 
 ```c
@@ -361,11 +383,16 @@ initialize_security_runtime(SEC_RUNTIME_SCAN |
                             SEC_RUNTIME_NETWORK_LOGGING);
 ```
 
-Standalone CLI equivalent (the shared secret comes from `-K/--network-key` or
-the `ANTICHEAT_NETWORK_KEY` environment variable):
+Standalone CLI equivalent. The shared secret **must** come from the
+`ANTICHEAT_NETWORK_KEY` environment variable; the `-K/--network-key` flag is a
+convenience only and prints a warning that it exposes the secret via `ps` and
+shell history:
 
 ```bash
+# Preferred: secret from the environment
 ANTICHEAT_NETWORK_KEY=secret ./anticheat -N 127.0.0.1:9999
+
+# Fallback (prints a key-hygiene warning):
 ./anticheat -N 127.0.0.1:9999 -K secret
 ```
 
@@ -377,11 +404,18 @@ renders a severity-colored live view (counts per severity + scrolling alert
 log). It falls back to plain colored line output when not attached to a TTY.
 
 When started **without** a key it runs in legacy mode and warns that datagrams
-are not authenticated — only suitable for local, trusted testing. Always pass
-`--network-key` (or set `ANTICHEAT_NETWORK_KEY`) so the dashboard rejects
-forged or tampered alerts.
+are not authenticated — only suitable for local, trusted testing. The shared
+secret **must** come from the `ANTICHEAT_NETWORK_KEY` environment variable; the
+`--network-key` flag is a convenience only and prints a warning that it exposes
+the secret via `ps` and shell history. When a key is set, the dashboard verifies
+each HMAC, enforces the **30s freshness window** and the **60s replay cache**,
+and silently drops any datagram that fails.
 
 ```bash
+# Preferred: secret from the environment
+ANTICHEAT_NETWORK_KEY=secret ./dashboard.py --host 0.0.0.0 --port 9999
+
+# Fallback (prints a key-hygiene warning):
 ./dashboard.py --host 0.0.0.0 --port 9999 --network-key secret
 ```
 

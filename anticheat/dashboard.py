@@ -17,9 +17,20 @@ shared secret. When --network-key (or ANTICHEAT_NETWORK_KEY) is set the dashboar
 verifies the signature and silently drops datagrams whose signature is missing or
 invalid. Run without a key only for local, trusted testing.
 
+Replay protection (only enforced when a key is configured):
+  * Freshness: a datagram whose "ts" is more than 30s outside the dashboard's
+    current clock is rejected, even with a valid signature.
+  * Replay cache: the last 60s of seen signature values are remembered; an
+    exact duplicate ("sig" already seen within the TTL) is rejected, so a
+    captured datagram cannot be replayed inside the freshness window.
+
+The shared secret MUST come from the ANTICHEAT_NETWORK_KEY environment variable
+in production. Passing --network-key on the command line exposes the secret via
+`ps` and shell history; a one-line warning is printed when it is used.
+
 Usage:
     ./dashboard.py                 # listens on 0.0.0.0:9999 (no verification)
-    ./dashboard.py --host 127.0.0.1 --port 9999 --network-key SECRET
+    ANTICHEAT_NETWORK_KEY=secret ./dashboard.py --host 127.0.0.1 --port 9999
     ./dashboard.py --no-curses    # plain colored line output (no TUI)
 
 Keys (TUI): q = quit, c = clear, r = reset counters.
@@ -40,6 +51,61 @@ from datetime import datetime
 # HMAC shared secret (set from --network-key or ANTICHEAT_NETWORK_KEY). When
 # None, the dashboard runs in legacy (unverified) mode and warns loudly.
 NET_KEY = None
+
+# Replay-protection tuning (only used when NET_KEY is set).
+FRESHNESS_WINDOW = 30.0   # seconds; |now - ts| must be within this
+REPLAY_TTL = 60.0         # seconds a seen signature stays in the replay cache
+MAX_REPLAY = 200000       # cap on the replay cache size (defensive)
+
+# Recently-seen signatures and their expiry epoch (float seconds).
+_replay_cache = {}
+# Drop counters, surfaced (throttled) to stderr so operators can see rejections.
+_stats = {"parse": 0, "auth": 0, "freshness": 0, "replay": 0}
+_last_log = [0.0]
+
+
+def _log_drop(kind, detail=""):
+    _stats[kind] = _stats.get(kind, 0) + 1
+    now = time.time()
+    if now - _last_log[0] >= 5.0:
+        _last_log[0] = now
+        msg = "[dashboard] dropped %s datagram (%d total)" % (
+            kind, _stats[kind])
+        if detail:
+            msg += " " + detail
+        print(msg, file=sys.stderr)
+
+
+def _purge_replay(now):
+    if len(_replay_cache) > MAX_REPLAY:
+        _replay_cache.clear()
+        return
+    expired = [k for k, exp in _replay_cache.items() if exp <= now]
+    for k in expired:
+        del _replay_cache[k]
+
+
+def check_freshness(obj):
+    """Return True iff obj's `ts` is an integer within FRESHNESS_WINDOW of now."""
+    ts = obj.get("ts")
+    if isinstance(ts, bool) or not isinstance(ts, int):
+        return False
+    return abs(time.time() - ts) <= FRESHNESS_WINDOW
+
+
+def check_replay(obj):
+    """Return True iff `sig` is a string not already in the replay cache; on
+    success the signature is recorded with a REPLAY_TTL expiry."""
+    sig = obj.get("sig")
+    if not isinstance(sig, str):
+        return False
+    now = time.time()
+    _purge_replay(now)
+    if sig in _replay_cache and _replay_cache[sig] > now:
+        return False
+    _replay_cache[sig] = now + REPLAY_TTL
+    return True
+
 
 SEV_NAMES = ["INFO", "LOW", "MEDIUM", "HIGH", "CRITICAL"]
 SEV_COLORS = {
@@ -99,10 +165,10 @@ def verify_sig(obj):
 
 
 def receive(sock, timeout=0.2):
-    """Return a list of decoded, HMAC-verified alert dicts received within
-    `timeout`. Malformed datagrams, and datagrams whose signature is missing or
-    invalid (when NET_KEY is set), are dropped silently rather than crashing the
-    dashboard."""
+    """Return a list of decoded, HMAC-verified, fresh, non-replayed alert dicts
+    received within `timeout`. Malformed datagrams and datagrams failing
+    authentication, freshness, or replay checks are logged and dropped rather
+    than crashing the dashboard."""
     alerts = []
     ready, _, _ = select.select([sock], [], [], timeout)
     if not ready:
@@ -123,14 +189,26 @@ def receive(sock, timeout=0.2):
             # Cannot parse: with a key configured we cannot verify, so reject;
             # in legacy mode keep it as a raw line for visibility.
             if NET_KEY is not None:
+                _log_drop("parse")
                 continue
             obj = {"severity": -1, "sev_label": "RAW",
                    "module": "network", "message": text,
                    "ts": int(time.time())}
         except Exception:
+            _log_drop("parse")
             continue
+
         if not verify_sig(obj):
+            _log_drop("auth")
             continue
+        # Replay protection only matters once we trust the signature.
+        if NET_KEY is not None:
+            if not check_freshness(obj):
+                _log_drop("freshness")
+                continue
+            if not check_replay(obj):
+                _log_drop("replay")
+                continue
         alerts.append(obj)
     return alerts
 
@@ -247,6 +325,14 @@ def main():
     NET_KEY = args.network_key
     if NET_KEY:
         print("HMAC verification ENABLED", file=sys.stderr)
+        # Key-hygiene warning: a command-line secret is visible via ps / shell
+        # history. Prefer the ANTICHEAT_NETWORK_KEY environment variable.
+        if any(a == "--network-key" or a.startswith("--network-key=")
+               for a in sys.argv):
+            print("WARNING: --network-key was passed on the command line; this "
+                  "exposes the shared secret via `ps` and shell history. Prefer "
+                  "the ANTICHEAT_NETWORK_KEY environment variable instead.",
+                  file=sys.stderr)
     else:
         print("WARNING: no --network-key / ANTICHEAT_NETWORK_KEY set; "
               "datagrams are NOT authenticated", file=sys.stderr)

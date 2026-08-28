@@ -137,6 +137,7 @@ int main(int argc, char **argv) {
     int ebpf_mon = 0;
     const char *network_arg = NULL;
     const char *network_key = NULL;
+    int network_key_flag = 0;
     int watch_interval = 250;
     int watch_time = 0;
 
@@ -182,6 +183,7 @@ int main(int argc, char **argv) {
                 break;
             case 'K':
                 network_key = optarg;
+                network_key_flag = 1;
                 break;
             case 'W':
                 watch_interval = atoi(optarg);
@@ -201,6 +203,13 @@ int main(int argc, char **argv) {
     reporter_t rep;
     report_init(&rep, log_path);
     report_set_quiet(quiet);
+
+    if (network_key_flag) {
+        fprintf(stderr,
+                "warning: -K/--network-key was passed on the command line; "
+                "this exposes the shared secret via `ps` and shell history. "
+                "Prefer the ANTICHEAT_NETWORK_KEY environment variable.\n");
+    }
 
     if (init_path) {
         if (!paths_arg) {
